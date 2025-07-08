@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Git - ApexCharts</title>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f4f4f4;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    select, input, button {
+      padding: 6px;
+      font-size: 16px;
+      margin-right: 10px;
+    }
+    #chart {
+      background: #fff;
+      padding: 10px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    #resumen {
+      background: #fff;
+      padding: 10px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.05);
+    }
+  </style>
+</head>
+<body>
+  <h1>📊 Dashboard de Cambios Git</h1>
+
+  <div id="controls">
+    <label for="tipoGrafico">Tipo de gráfico: </label>
+    <select id="tipoGrafico">
+      <option value="porUsuario">Líneas modificadas por usuario</option>
+      <option value="porTipo">Distribución por tipo de cambio</option>
+      <option value="timeline">Commits por fecha</option>
+      <option value="porArchivo">Top archivos más modificados</option>
+    </select>
+
+    <label for="filtroUsuario">Filtrar por usuario: </label>
+    <select id="filtroUsuario">
+      <option value="">Todos</option>
+    </select>
+
+    <label for="filtroFecha">Desde fecha: </label>
+    <input type="date" id="filtroFecha" />
+
+    <button onclick="exportarCSV()">📥 Exportar CSV</button>
+    <button onclick="descargarGrafico()">📸 Descargar Gráfico</button>
+  </div>
+
+  <div id="chart"></div>
+  <div id="resumen"></div>
+
+  <script>
+    let datosGlobales = [];
+
+    async function cargarDatos() {
+      const response = await fetch('dataRepos/compilado.json');
+      const json = await response.json();
+      datosGlobales = json;
+      poblarFiltros(json);
+      renderGrafico();
+    }
+
+    function poblarFiltros(datos) {
+      const usuarios = [...new Set(datos.map(d => d.gitUser))].sort();
+      const filtro = document.getElementById('filtroUsuario');
+      filtro.innerHTML = '<option value="">Todos</option>' + usuarios.map(u => `<option value="${u}">${u}</option>`).join('');
+    }
+
+    function aplicarFiltros(datos) {
+      const usuario = document.getElementById('filtroUsuario').value;
+      const fecha = document.getElementById('filtroFecha').value;
+      return datos.filter(d => {
+        const coincideUsuario = !usuario || d.gitUser === usuario;
+        const coincideFecha = !fecha || new Date(d.date_commit.split('-').reverse().join('-')) >= new Date(fecha);
+        return coincideUsuario && coincideFecha;
+      });
+    }
+
+    function mostrarResumen(datos) {
+      const totalCommits = datos.length;
+      const totalArchivos = new Set(datos.map(d => d.file_Path)).size;
+      const lineasAgregadas = datos.reduce((sum, d) => sum + (d.lineas_agregadas || 0), 0);
+      const lineasEliminadas = datos.reduce((sum, d) => sum + (d.lineas_eliminadas || 0), 0);
+
+      document.getElementById("resumen").innerHTML = `
+        <h3>📌 Resumen de datos filtrados</h3>
+        <ul>
+          <li><strong>Total de commits:</strong> ${totalCommits}</li>
+          <li><strong>Total de archivos afectados:</strong> ${totalArchivos}</li>
+          <li><strong>Total líneas agregadas:</strong> ${lineasAgregadas}</li>
+          <li><strong>Total líneas eliminadas:</strong> ${lineasEliminadas}</li>
+        </ul>
+      `;
+    }
+
+    function renderPorUsuario(datos) {
+      const porUsuario = {};
+      datos.forEach(d => {
+        const user = d.gitUser;
+        const total = (d.lineas_agregadas || 0) + (d.lineas_eliminadas || 0);
+        porUsuario[user] = (porUsuario[user] || 0) + total;
+      });
+      const series = [{
+        name: "Total líneas modificadas",
+        data: Object.values(porUsuario)
+      }];
+      const options = {
+        chart: { type: 'bar' },
+        xaxis: { categories: Object.keys(porUsuario) },
+        title: { text: 'Líneas modificadas por usuario' }
+      };
+      renderChart(options, series);
+    }
+
+    function renderPorTipo(datos) {
+      const tipos = { Agregado: 0, Modificado: 0, Eliminado: 0 };
+      datos.forEach(d => tipos[d.dato] = (tipos[d.dato] || 0) + 1);
+      const options = {
+        chart: { type: 'pie' },
+        labels: Object.keys(tipos),
+        series: Object.values(tipos),
+        title: { text: 'Distribución por tipo de cambio' }
+      };
+      renderChart(options);
+    }
+
+    function renderTimeline(datos) {
+      const fechas = {};
+      datos.forEach(d => {
+        const f = d.date_commit;
+        fechas[f] = (fechas[f] || 0) + 1;
+      });
+      const fechasOrdenadas = Object.entries(fechas).sort((a,b)=>new Date(a[0]) - new Date(b[0]));
+      const options = {
+        chart: { type: 'line' },
+        xaxis: { categories: fechasOrdenadas.map(f=>f[0]) },
+        series: [{ name: 'Commits por fecha', data: fechasOrdenadas.map(f=>f[1]) }],
+        title: { text: 'Commits en el tiempo' }
+      };
+      renderChart(options);
+    }
+
+    function renderPorArchivo(datos) {
+      const porArchivo = {};
+      datos.forEach(d => {
+        porArchivo[d.file_Path] = (porArchivo[d.file_Path] || 0) + 1;
+      });
+      const topArchivos = Object.entries(porArchivo).sort((a,b)=>b[1]-a[1]).slice(0,10);
+      const options = {
+        chart: { type: 'bar' },
+        xaxis: { categories: topArchivos.map(f=>f[0]) },
+        series: [{ name: 'Commits', data: topArchivos.map(f=>f[1]) }],
+        title: { text: 'Top 10 archivos más modificados' }
+      };
+      renderChart(options);
+    }
+
+    let chart;
+    function renderChart(options, series = options.series) {
+      if (chart) chart.destroy();
+      chart = new ApexCharts(document.querySelector("#chart"), { ...options, series });
+      chart.render();
+    }
+
+    function renderGrafico() {
+      const tipo = document.getElementById('tipoGrafico').value;
+      const datosFiltrados = aplicarFiltros(datosGlobales);
+      mostrarResumen(datosFiltrados);
+      if (tipo === 'porUsuario') renderPorUsuario(datosFiltrados);
+      else if (tipo === 'porTipo') renderPorTipo(datosFiltrados);
+      else if (tipo === 'timeline') renderTimeline(datosFiltrados);
+      else if (tipo === 'porArchivo') renderPorArchivo(datosFiltrados);
+    }
+
+    function exportarCSV() {
+      const datos = aplicarFiltros(datosGlobales);
+      const encabezado = Object.keys(datos[0]).join(',');
+      const filas = datos.map(d => Object.values(d).join(','));
+      const totalCommits = datos.length;
+      const totalArchivos = new Set(datos.map(d => d.file_Path)).size;
+      const lineasAgregadas = datos.reduce((sum, d) => sum + (d.lineas_agregadas || 0), 0);
+      const lineasEliminadas = datos.reduce((sum, d) => sum + (d.lineas_eliminadas || 0), 0);
+
+      const resumen = [
+        '',
+        'Resumen:',
+        `Total commits: ${totalCommits}`,
+        `Total archivos afectados: ${totalArchivos}`,
+        `Total líneas agregadas: ${lineasAgregadas}`,
+        `Total líneas eliminadas: ${lineasEliminadas}`
+      ];
+
+  const contenido = [encabezado, ...filas, ...resumen].join('\n');
+  const blob = new Blob([contenido], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'cambios_git.csv';
+  a.click();
+}
+
+    function descargarGrafico() {
+      if (chart) chart.dataURI().then(({ imgURI }) => {
+        const a = document.createElement('a');
+        a.href = imgURI;
+        a.download = 'grafico_git.png';
+        a.click();
+      });
+    }
+
+    document.getElementById('tipoGrafico').addEventListener('change', renderGrafico);
+    document.getElementById('filtroUsuario').addEventListener('change', renderGrafico);
+    document.getElementById('filtroFecha').addEventListener('change', renderGrafico);
+
+    cargarDatos();
+  </script>
+</body>
+</html>
